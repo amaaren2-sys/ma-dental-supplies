@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: ma-dental-supplies
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: WHATSAPP_NUMBER
+        sync: false
+      - key: INSTAGRAM_URL
+        sync: false
+      - key: FACEBOOK_URL
+        sync: false
+      - key: TELEGRAM_URL
+        sync: false
+      - key: WHATSAPP_URL
+        sync: false
