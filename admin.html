@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>لوحة التحكم | MA Dental Supplies</title>
+<link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800&family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css"></head>
+<body class="admin-wrap">
+<div id="loginView" class="login"><h1>MA Dental Supplies</h1><p>دخول لوحة التحكم</p>
+<form id="loginForm"><div class="field"><label>البريد الإلكتروني</label><input id="email" type="email" required></div>
+<div class="field"><label>كلمة المرور</label><input id="password" type="password" required></div>
+<button class="btn primary" style="width:100%;margin-top:15px">دخول</button></form>
+<p id="loginError" style="color:#a62e50;font-size:10px"></p></div>
+<div id="adminView" style="display:none"><div class="admin-nav"><strong>MA Dental Supplies — لوحة التحكم</strong><button class="btn outline small" id="logout">تسجيل الخروج</button></div>
+<main class="admin"><div class="dash-grid" id="stats"></div>
+<div id="orderModal" class="order-modal" style="display:none" role="dialog" aria-modal="true" aria-labelledby="orderModalTitle">
+  <div class="order-modal-card">
+    <div class="order-modal-head"><h3 id="orderModalTitle">تفاصيل الطلب</h3><button class="btn outline small" id="closeOrderModal" type="button">إغلاق</button></div>
+    <div id="orderModalBody"></div>
+  </div>
+</div>
+<section class="admin-section"><div class="head"><h2>إضافة منتج</h2></div>
+<form class="admin-form" id="productForm">
+<input name="name" placeholder="اسم المنتج" required><input name="brand" placeholder="العلامة التجارية">
+<select name="category"><option value="المواد">المواد</option><option value="البكجات">البكجات</option></select>
+<input name="price" type="number" step="0.01" placeholder="السعر" required><input name="stock" type="number" placeholder="المخزون" value="0">
+<input name="icon" placeholder="إيموجي احتياطي" value="🦷">
+<div class="image-upload"><label>صورة المنتج</label><input name="image" id="productImage" type="file" accept="image/jpeg,image/png,image/webp,image/gif"><small>اختر JPG أو PNG أو WEBP. الصورة ترفع إلى Supabase تلقائيًا.</small><img id="imagePreview" class="admin-image-preview" alt="معاينة الصورة" style="display:none"></div>
+<textarea name="description" placeholder="وصف المنتج"></textarea><label style="font-size:10px"><input name="featured" type="checkbox"> الأكثر طلبًا</label>
+<button class="btn primary" id="addProductBtn">إضافة المنتج</button></form></section>
+<section class="admin-section"><div class="head"><h2>المنتجات</h2><button class="btn outline small" id="reloadProducts">تحديث</button></div>
+<div class="table-wrap"><table class="table"><thead><tr><th>الصورة</th><th>المنتج</th><th>السعر</th><th>المخزون</th><th>القسم</th><th>إجراءات</th></tr></thead><tbody id="productsTable"></tbody></table></div></section>
+<section class="admin-section"><div class="head"><h2>الطلبات</h2><button class="btn outline small" id="reloadOrders">تحديث</button></div>
+<div class="table-wrap"><table class="table"><thead><tr><th>الطلب</th><th>العميل</th><th>المكان</th><th>الإجمالي</th><th>الحالة</th><th>التفاصيل</th></tr></thead><tbody id="ordersTable"></tbody></table></div></section>
+</main></div>
+<script src="config.js"></script><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script><script src="supabase-client.js"></script>
+<script>
+const $=s=>document.querySelector(s), money=n=>"$"+Number(n).toFixed(2);
+const statuses=["جديد","قيد التجهيز","جاهز للتسليم","تم التسليم","ملغى"];
+let productsCache=[];
+function esc(v){return String(v??"").replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function slugify(s){return String(s).trim().toLowerCase().replace(/[^\w\u0600-\u06ff]+/g,"-")+"-"+Date.now().toString(36)}
+async function requireUser(){const {data}=await sb.auth.getSession();return data.session?.user||null}
+async function uploadImage(file,productId){
+  if(!file)return "";
+  if(file.size>5*1024*1024)throw new Error("حجم الصورة يجب أن يكون أقل من 5MB");
+  const ext=(file.name.split('.').pop()||'jpg').toLowerCase().replace(/[^a-z0-9]/g,'')||'jpg';
+  const path=`${productId}/${Date.now()}-${crypto.randomUUID()}.${ext}`;
+  const {error}=await sb.storage.from('product-images').upload(path,file,{cacheControl:'3600',upsert:false,contentType:file.type||'image/jpeg'});
+  if(error)throw error;
+  const {data}=sb.storage.from('product-images').getPublicUrl(path);
+  return data.publicUrl;
+}
+function previewFile(file){const img=$("#imagePreview");if(!file){img.style.display='none';img.removeAttribute('src');return}img.src=URL.createObjectURL(file);img.style.display='block'}
+async function load(){
+ const {data:p,error:pe}=await sb.from("products").select("*").order("created_at",{ascending:false});if(pe)throw pe;
+ const {data:o,error:oe}=await sb.from("orders").select("*,order_items(*)").order("created_at",{ascending:false});if(oe)throw oe;
+ const orders=o||[], products=p||[];productsCache=products;
+ const revenue=orders.filter(x=>x.status!=="ملغى").reduce((s,x)=>s+Number(x.total),0),pending=orders.filter(x=>x.status==="جديد").length;
+ $("#stats").innerHTML=`<div class="stat"><small>المنتجات</small><strong>${products.length}</strong></div><div class="stat"><small>كل الطلبات</small><strong>${orders.length}</strong></div><div class="stat"><small>طلبات جديدة</small><strong>${pending}</strong></div><div class="stat"><small>إجمالي الطلبات</small><strong>${money(revenue)}</strong></div>`;
+ $("#productsTable").innerHTML=products.map(x=>`<tr><td>${x.image_url?`<img class="table-product-image" src="${esc(x.image_url)}" alt="${esc(x.name)}">`:esc(x.icon||"🦷")}</td><td>${esc(x.name)}<br><small>${esc(x.brand||"")}</small></td><td>${money(x.price)}</td><td>${x.stock}</td><td>${esc(x.category)}</td><td><div class="admin-actions"><button class="btn small outline" onclick="editProduct('${x.id}')">تعديل</button><button class="btn small danger" onclick="deleteProduct('${x.id}')">حذف</button></div></td></tr>`).join("");
+ $("#ordersTable").innerHTML=orders.map(x=>`<tr><td><b>${esc(x.id)}</b><br><small>${new Date(x.created_at).toLocaleString("ar-SY")}</small></td><td>${esc(x.customer_name)}<br>${esc(x.customer_phone)}</td><td>${esc(x.customer_location)}</td><td>${money(x.total)}</td><td><select class="status" onchange="setStatus('${x.id}',this.value)">${statuses.map(s=>`<option ${s===x.status?"selected":""}>${s}</option>`).join("")}</select></td><td><button class="btn small outline" type="button" onclick="showOrder('${x.id}')">👁️ تفاصيل الطلب</button></td></tr>`).join("");
+ window.__orders=orders;
+}
+async function editProduct(id){
+ const d=productsCache.find(x=>x.id===id);if(!d)return;
+ const name=prompt("اسم المنتج",d.name);if(name===null)return;
+ const price=prompt("السعر",d.price);if(price===null)return;
+ const stock=prompt("المخزون",d.stock);if(stock===null)return;
+ const description=prompt("الوصف",d.description||"");if(description===null)return;
+ const fileInput=document.createElement('input');fileInput.type='file';fileInput.accept='image/jpeg,image/png,image/webp,image/gif';
+ const replace=confirm("هل تريد تغيير صورة المنتج؟");let image_url=d.image_url||"";
+ if(replace){fileInput.click();await new Promise(resolve=>fileInput.onchange=resolve);if(fileInput.files[0]) image_url=await uploadImage(fileInput.files[0],id);}
+ const {error:e}=await sb.from("products").update({name:name.trim(),price:Number(price),stock:Math.max(0,Math.floor(Number(stock)||0)),description,image_url,slug:slugify(name)}).eq("id",id);if(e)throw e;await load();
+}
+async function deleteProduct(id){if(!confirm("حذف المنتج؟"))return;const {error}=await sb.from("products").delete().eq("id",id);if(error)throw error;await load()}
+function showOrder(id){
+ const order=(window.__orders||[]).find(x=>x.id===id);if(!order)return;
+ const items=Array.isArray(order.order_items)?order.order_items:[];
+ const rows=items.length?items.map(i=>`<tr><td>${esc(i.product_name)}</td><td>${i.qty}</td><td>${money(i.price)}</td><td><strong>${money(Number(i.price)*Number(i.qty))}</strong></td></tr>`).join(""):"<tr><td colspan=4>لا توجد تفاصيل منتجات لهذا الطلب.</td></tr>";
+ $("#orderModalTitle").textContent=`تفاصيل الطلب ${order.id}`;
+ $("#orderModalBody").innerHTML=`<div class="order-customer-grid"><div><small>العميل</small><strong>${esc(order.customer_name)}</strong></div><div><small>الهاتف</small><strong>${esc(order.customer_phone)}</strong></div><div><small>مكان الاستلام</small><strong>${esc(order.customer_location)}</strong></div><div><small>الحالة</small><strong>${esc(order.status)}</strong></div></div><div class="order-items-wrap"><table class="table order-items-table"><thead><tr><th>المنتج</th><th>الكمية</th><th>سعر الوحدة</th><th>المجموع</th></tr></thead><tbody>${rows}</tbody></table></div><div class="order-total"><span>الإجمالي النهائي</span><strong>${money(order.total)}</strong></div><div class="order-notes"><small>ملاحظات الزبون</small><p>${order.notes?esc(order.notes):"لا توجد ملاحظات."}</p></div>`;
+ $("#orderModal").style.display="flex";
+}
+function closeOrderModal(){$("#orderModal").style.display="none"}
+$("#closeOrderModal").onclick=closeOrderModal;
+$("#orderModal").onclick=e=>{if(e.target.id==="orderModal")closeOrderModal()};
+document.addEventListener("keydown",e=>{if(e.key==="Escape")closeOrderModal()});
+async function setStatus(id,status){const {error}=await sb.from("orders").update({status}).eq("id",id);if(error)alert(error.message);else load()}
+$("#productImage").onchange=e=>previewFile(e.target.files[0]);
+$("#loginForm").onsubmit=async e=>{e.preventDefault();try{const {error}=await sb.auth.signInWithPassword({email:$("#email").value.trim(),password:$("#password").value});if(error)throw error;await boot()}catch(err){$("#loginError").textContent=err.message}};
+$("#logout").onclick=async()=>{await sb.auth.signOut();location.reload()};
+$("#productForm").onsubmit=async e=>{e.preventDefault();const btn=$("#addProductBtn");btn.disabled=true;btn.textContent="جارٍ الرفع...";try{
+ const f=new FormData(e.target), id="p"+crypto.randomUUID().replaceAll('-','').slice(0,12);const name=String(f.get("name")).trim();
+ const data={id,name,brand:String(f.get("brand")||""),category:f.get("category")==="البكجات"?"البكجات":"المواد",price:Number(f.get("price"))||0,stock:Math.max(0,Math.floor(Number(f.get("stock"))||0)),icon:String(f.get("icon")||"🦷"),image_url:"",description:String(f.get("description")||""),featured:f.get("featured")==="on",slug:slugify(name)};
+ const file=f.get("image");if(file&&file.size){data.image_url=await uploadImage(file,id)}
+ const {error}=await sb.from("products").insert(data);if(error)throw error;e.target.reset();$("#imagePreview").style.display='none';await load();alert("تمت إضافة المنتج بنجاح ✓");
+ }catch(err){alert(err.message||"تعذر إضافة المنتج")}finally{btn.disabled=false;btn.textContent="إضافة المنتج"}};
+$("#reloadProducts").onclick=load;$("#reloadOrders").onclick=load;
+async function boot(){const u=await requireUser();if(!u){$("#loginView").style.display="block";$("#adminView").style.display="none";return}$("#loginView").style.display="none";$("#adminView").style.display="block";try{await load()}catch(e){alert("تعذر تحميل لوحة التحكم: "+e.message)}}boot();
+</script></body></html>
